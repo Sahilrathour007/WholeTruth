@@ -102,14 +102,15 @@ app.post("/order", async (req, res) => {
   // Build payload rows for Google Sheets
   const orderDate = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
   const rows = orders.map(item => ({
-    name: item.name.trim(),
-    phone: item.phone.trim(),
-    city: item.city.trim(),
-    address: item.address.trim(),
+    order_date:   orderDate,
+    name:         item.name.trim(),
+    email:        item.email ? item.email.trim() : "",  // ← ADDED
+    phone:        item.phone.trim(),
+    city:         item.city.trim(),
+    address:      item.address.trim(),
     product_name: item.product_name.trim(),
-    order_value: item.order_value,
-    quantity: item.quantity || 1,
-    order_date: orderDate,
+    quantity:     item.quantity || 1,
+    order_value:  item.order_value,
     return_status: "No",
   }));
 
@@ -141,8 +142,6 @@ app.post("/order", async (req, res) => {
     // Log error but don't expose internals to client
     console.error("[ORDER ERROR]", err.message || err);
 
-    // If Google Sheets fails, still acknowledge (optional: use a queue/fallback)
-    // For production, add a local DB fallback here
     return res.status(500).json({
       success: false,
       message: "We received your order but had a logging issue. Please contact support if not confirmed.",
