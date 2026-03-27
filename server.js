@@ -13,17 +13,16 @@ const PORT = process.env.PORT || 3000;
 
 // ── MIDDLEWARE ───────────────────────────────────
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGIN || "*", // Set your frontend URL in production
+  origin: process.env.ALLOWED_ORIGIN || "*",
   methods: ["POST", "GET"],
 }));
 app.use(express.json());
 
 // ── CONFIG ───────────────────────────────────────
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
-// Paste your deployed Google Apps Script Web App URL in .env as GOOGLE_SCRIPT_URL
 
 // ── DUPLICATE ORDER STORE (in-memory, 5min window) ──
-const recentOrders = new Map(); // key → timestamp
+const recentOrders = new Map();
 
 function buildDedupKey(name, phone, productName) {
   return `${name.toLowerCase()}::${phone}::${productName.toLowerCase()}`;
@@ -52,12 +51,13 @@ setInterval(() => {
 // ── VALIDATORS ───────────────────────────────────
 function validateOrderItem(item) {
   const errors = [];
-  if (!item.name || item.name.trim().length < 2) errors.push("Invalid name");
-  if (!/^\d{10}$/.test(item.phone)) errors.push("Invalid phone number");
-  if (!item.city || item.city.trim().length < 2) errors.push("Invalid city");
-  if (!item.address || item.address.trim().length < 10) errors.push("Invalid address");
-  if (!item.product_name) errors.push("Missing product name");
-  if (!item.order_value || isNaN(item.order_value) || item.order_value <= 0) errors.push("Invalid order value");
+  if (!item.name || item.name.trim().length < 2)          errors.push("Invalid name");
+  if (!/^\d{10}$/.test(item.phone))                       errors.push("Invalid phone number");
+  if (!item.city || item.city.trim().length < 2)          errors.push("Invalid city");
+  if (!item.address || item.address.trim().length < 10)   errors.push("Invalid address");
+  if (!item.product_name)                                  errors.push("Missing product name");
+  if (!item.order_value || isNaN(item.order_value) || item.order_value <= 0)
+                                                           errors.push("Invalid order value");
   return errors;
 }
 
@@ -100,18 +100,23 @@ app.post("/order", async (req, res) => {
   }
 
   // Build payload rows for Google Sheets
+  // NEW: utm_source, utm_medium, utm_campaign now included
+  // These tell your sheet whether an order came from a reorder reminder or direct visit
   const orderDate = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
   const rows = orders.map(item => ({
-    order_date:   orderDate,
-    name:         item.name.trim(),
-    email:        item.email ? item.email.trim() : "",  // ← ADDED
-    phone:        item.phone.trim(),
-    city:         item.city.trim(),
-    address:      item.address.trim(),
-    product_name: item.product_name.trim(),
-    quantity:     item.quantity || 1,
-    order_value:  item.order_value,
+    order_date:    orderDate,
+    name:          item.name.trim(),
+    email:         item.email          ? item.email.trim()          : "",
+    phone:         item.phone.trim(),
+    city:          item.city.trim(),
+    address:       item.address.trim(),
+    product_name:  item.product_name.trim(),
+    quantity:      item.quantity       || 1,
+    order_value:   item.order_value,
     return_status: "No",
+    utm_source:    item.utm_source     || "organic",  // NEW: "email" = came from reminder
+    utm_medium:    item.utm_medium     || "",          // NEW: "reminder"
+    utm_campaign:  item.utm_campaign   || "",          // NEW: "reorder_reminder"
   }));
 
   // Send to Google Sheets
@@ -130,7 +135,7 @@ app.post("/order", async (req, res) => {
     // Register orders for dedup
     orders.forEach(item => registerOrder(item.name, item.phone, item.product_name));
 
-    console.log(`[ORDER] ✓ ${rows.length} row(s) submitted by ${rows[0].name} at ${orderDate}`);
+    console.log(`[ORDER] ✓ ${rows.length} row(s) by ${rows[0].name} | source: ${rows[0].utm_source} | ${orderDate}`);
 
     return res.status(200).json({
       success: true,
@@ -139,7 +144,6 @@ app.post("/order", async (req, res) => {
     });
 
   } catch (err) {
-    // Log error but don't expose internals to client
     console.error("[ORDER ERROR]", err.message || err);
 
     return res.status(500).json({
