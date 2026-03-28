@@ -21,7 +21,10 @@ app.use(express.json());
 // ── CONFIG ───────────────────────────────────────
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
 
-// ── DUPLICATE ORDER STORE (in-memory, 5min window) ──
+// ── DUPLICATE ORDER STORE ────────────────────────
+// FIX: Window reduced from 5 minutes to 30 seconds
+// 5 min was blocking legitimate reorders of same product
+// 30 sec is enough to prevent accidental double-clicks only
 const recentOrders = new Map();
 
 function buildDedupKey(name, phone, productName) {
@@ -31,7 +34,7 @@ function buildDedupKey(name, phone, productName) {
 function isDuplicateOrder(name, phone, productName) {
   const key = buildDedupKey(name, phone, productName);
   const last = recentOrders.get(key);
-  if (last && Date.now() - last < 5 * 60 * 1000) return true;
+  if (last && Date.now() - last < 30 * 1000) return true; // FIX: was 5 * 60 * 1000
   return false;
 }
 
@@ -40,13 +43,13 @@ function registerOrder(name, phone, productName) {
   recentOrders.set(key, Date.now());
 }
 
-// Clean up old entries every 10 minutes
+// Clean up old entries every 2 minutes
 setInterval(() => {
   const now = Date.now();
   for (const [key, ts] of recentOrders.entries()) {
-    if (now - ts > 10 * 60 * 1000) recentOrders.delete(key);
+    if (now - ts > 2 * 60 * 1000) recentOrders.delete(key); // FIX: was 10 * 60 * 1000
   }
-}, 10 * 60 * 1000);
+}, 2 * 60 * 1000);
 
 // ── VALIDATORS ───────────────────────────────────
 function validateOrderItem(item) {
@@ -88,7 +91,7 @@ app.post("/order", async (req, res) => {
     return res.status(400).json({ success: false, message: allErrors.join(" | ") });
   }
 
-  // Duplicate check
+  // Duplicate check — only blocks within 30 seconds (double-click protection)
   const duplicates = orders.filter(item =>
     isDuplicateOrder(item.name, item.phone, item.product_name)
   );
@@ -100,8 +103,6 @@ app.post("/order", async (req, res) => {
   }
 
   // Build payload rows for Google Sheets
-  // NEW: utm_source, utm_medium, utm_campaign now included
-  // These tell your sheet whether an order came from a reorder reminder or direct visit
   const orderDate = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
   const rows = orders.map(item => ({
     order_date:    orderDate,
@@ -114,9 +115,9 @@ app.post("/order", async (req, res) => {
     quantity:      item.quantity       || 1,
     order_value:   item.order_value,
     return_status: "No",
-    utm_source:    item.utm_source     || "organic",  // NEW: "email" = came from reminder
-    utm_medium:    item.utm_medium     || "",          // NEW: "reminder"
-    utm_campaign:  item.utm_campaign   || "",          // NEW: "reorder_reminder"
+    utm_source:    item.utm_source     || "organic",
+    utm_medium:    item.utm_medium     || "",
+    utm_campaign:  item.utm_campaign   || "",
   }));
 
   // Send to Google Sheets
