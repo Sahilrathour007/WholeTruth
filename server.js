@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 3000;
 
 // ── MIDDLEWARE ───────────────────────────────────
 app.use(cors({
-  origin: ["https://sahilrathour007.github.io"],
+  origin: ["https://sahilrathour007.github.io/WholeTruth-frontend/"],
   methods: ["POST", "GET", "OPTIONS"],
   allowedHeaders: ["Content-Type"],
 }));
