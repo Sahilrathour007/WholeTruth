@@ -293,7 +293,7 @@ function buildDailyTaskEmailHTML({ userName, taskDescription, taskType, dayNumbe
   return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#F6F1E9;font-family:Arial,sans-serif;">
   <div style="max-width:520px;margin:24px auto;background:#FDFAF5;border:1px solid #D8CEBC;border-radius:12px;overflow:hidden;">
     <div style="background:#1a1a1a;padding:16px 28px;">
-      <span style="color:#fff;font-size:12px;font-weight:700;letter-spacing:4px;">ALPINO HABIT ENGINE</span>
+      <span style="color:#fff;font-size:12px;font-weight:700;letter-spacing:4px;">THE WHOLE TRUTH HABIT ENGINE</span>
     </div>
     <div style="padding:28px;">
       ${streakBadge}
@@ -319,7 +319,7 @@ function buildRecoveryEmailHTML({ userName, dayNumber }) {
   return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#F6F1E9;font-family:Arial,sans-serif;">
   <div style="max-width:520px;margin:24px auto;background:#FDFAF5;border:1px solid #D8CEBC;border-radius:12px;overflow:hidden;">
     <div style="background:#1a1a1a;padding:16px 28px;">
-      <span style="color:#fff;font-size:12px;font-weight:700;letter-spacing:4px;">ALPINO HABIT ENGINE</span>
+      <span style="color:#fff;font-size:12px;font-weight:700;letter-spacing:4px;">THE WHOLE TRUTH HABIT ENGINE</span>
     </div>
     <div style="padding:28px;">
       <h2 style="margin:0 0 12px;font-size:20px;">Hey ${userName} — you missed a day.</h2>
@@ -805,7 +805,7 @@ async function triggerReorderEmail(userId, taskId) {
     html: `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#F6F1E9;font-family:Arial,sans-serif;">
   <div style="max-width:520px;margin:24px auto;background:#FDFAF5;border:1px solid #D8CEBC;border-radius:12px;overflow:hidden;">
     <div style="background:#1a1a1a;padding:16px 28px;">
-      <span style="color:#fff;font-size:12px;font-weight:700;letter-spacing:4px;">ALPINO</span>
+      <span style="color:#fff;font-size:12px;font-weight:700;letter-spacing:4px;">THE WHOLE TRUTH</span>
     </div>
     <div style="padding:28px;">
       <h2 style="margin:0 0 12px;">You have built 5+ days of habit, ${user.name}.</h2>
