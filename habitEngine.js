@@ -290,13 +290,20 @@ async function writeToDb({ userId, orderId, context, planType, idempotencyKey })
   // PERMANENT FIX: Product mismatch guard.
   // If the user ordered whey but the first task says peanut_butter,
   // something upstream is broken. Fail loudly — do NOT silently send wrong plan.
+  //
+  // EXCEPTION: vegan users get whey swapped to peanut_butter by guardDietPref()
+  // in taskTemplates.js — this is intentional and valid, not a mismatch.
   if (context.hasOrder && context.productCategories.length > 0) {
+    const CATEGORY_MAP = { whey: 'whey', protein: 'whey', peanut_butter: 'peanut_butter', protein_bar: 'protein_bar', snack: 'protein_bar', muesli: 'muesli' };
     const expectedProducts = new Set(
-      context.productCategories.map(cat => {
-        const map = { whey: 'whey', protein: 'whey', peanut_butter: 'peanut_butter', protein_bar: 'protein_bar', snack: 'protein_bar', muesli: 'muesli' };
-        return map[cat] || null;
-      }).filter(Boolean)
+      context.productCategories.map(cat => CATEGORY_MAP[cat] || null).filter(Boolean)
     );
+    // Vegan diet: guardDietPref() in taskTemplates swaps whey_* -> pb_*
+    // peanut_butter is a valid outcome for a vegan whey buyer.
+    const dietPref = context.intent?.diet_pref || '';
+    if (dietPref === 'vegan' && expectedProducts.has('whey')) {
+      expectedProducts.add('peanut_butter');
+    }
     const day1Task = taskRows.find(t => t.day_number === 1);
     if (day1Task && day1Task.primary_product && !expectedProducts.has(day1Task.primary_product)) {
       console.error(`[habitEngine] PRODUCT MISMATCH: user ordered [${[...expectedProducts].join(',')}] but plan assigned ${day1Task.primary_product}. Aborting plan.`);
