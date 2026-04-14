@@ -1,17 +1,32 @@
 // ============================================================
-// habitEngine.js — The Brain v2.4
-// Fixed:
-//   v2.2 - source: 'order' → 'website' (habit_plans_source_check)
-//   v2.3 - order_id: always null (habit_plans_order_id_fkey mismatch)
-//   v2.4 - acquireLock: purge expired locks before insert
-//           prevents stale crash locks from permanently blocking future runs
-//         - generateHabitPlan: catch writeToDb errors → dead_letters
-//           previously write failures propagated with no retry queue entry
-//           (root cause of Navneet: plan_id=NULL, dead_letter_id=NULL)
+// habitEngine.js — The Brain v2.5
+//
+// What changed from v2.4:
+//
+//   v2.5 — PRODUCT MISMATCH GUARD: fully diet-aware
+//     • Previously the guard only allowed peanut_butter as a valid
+//       vegan substitute for whey. This was incomplete:
+//       – muesli is also blocked for vegan (dairy) → peanut_butter valid
+//       – protein_bar is also blocked for vegan → peanut_butter valid
+//       – muesli_vegan is an adaptation, not a rejection → muesli valid
+//     • Guard now reads PRODUCT_DIET_RULES from taskTemplates to resolve
+//       what the final product WILL be after diet substitution, then
+//       checks THAT against the mismatch list. No more false aborts.
+//
+//   v2.5 — buildUserContext: scoped to most recent order when no orderId given
+//     • Previously: pulled ALL order_items for the user (polluted by history)
+//     • Now: resolves the most recent order_id and scopes to it
+//     • If no orders exist, items = [] (no phantom fallback to peanut_butter)
+//
+//   v2.5 — diet_pref added to diagnostic log
+//
+//   v2.4 (kept):
+//     - acquireLock: purge expired locks before insert
+//     - generateHabitPlan: catch writeToDb errors → dead_letters
 // ============================================================
 
 const { createClient } = require('@supabase/supabase-js');
-const { getTemplate, getTaskForDay } = require('./taskTemplates');
+const { getTemplate, getTaskForDay, isProductAllowedForDiet, PRODUCT_DIET_RULES } = require('./taskTemplates');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -43,18 +58,16 @@ function getISTDate(daysOffset = 0) {
 // STEP 0 — RATE / CONCURRENCY CONTROL
 // ─────────────────────────────────────────────
 async function acquireLock(userId) {
-  const lockKey = `lock:plan:${userId}`;
-  const now = new Date().toISOString();
+  const lockKey   = `lock:plan:${userId}`;
+  const now       = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 30_000).toISOString();
 
   // PERMANENT FIX: delete any stale/expired locks first.
-  // Without this, a crashed process leaves a lock row that blocks
-  // all future attempts until it ages out — dead_letters never gets written.
   await supabase
     .from('distributed_locks')
     .delete()
     .eq('lock_key', lockKey)
-    .lt('expires_at', now);  // only delete if already expired
+    .lt('expires_at', now);
 
   const { data, error } = await supabase
     .from('distributed_locks')
@@ -62,11 +75,7 @@ async function acquireLock(userId) {
     .select('id')
     .single();
 
-  if (error) {
-    // Another live (non-expired) lock exists — genuine concurrency block
-    return { acquired: false };
-  }
-
+  if (error) return { acquired: false };
   return { acquired: true, lockId: data.id };
 }
 
@@ -94,14 +103,24 @@ async function checkIdempotency(userId, orderId) {
 // STEP 2 — BUILD USER CONTEXT
 // ─────────────────────────────────────────────
 async function buildUserContext(userId, orderId) {
-  // FIX [2]: Always load purchase data from a stable source.
-  // When orderId is present, scope to that order for precision.
-  // When orderId is absent, fall back to ALL order_items for this user.
-  // NOTE: order_items has no created_at column — do NOT order by it.
-  // Quantity-based ranking is handled in JS below (sortedProducts).
-  const itemsQuery = orderId
-    ? supabase.from('order_items').select('product_name, category, quantity').eq('order_id', orderId)
-    : supabase.from('order_items').select('product_name, category, quantity').eq('user_id', userId).limit(50);
+  // v2.5 FIX: When orderId is absent, scope to the MOST RECENT order only.
+  // Using all user history caused old purchases to skew product selection
+  // (e.g. an old peanut_butter order outweighing a fresh whey+muesli order).
+  let resolvedOrderId = orderId;
+  if (!resolvedOrderId) {
+    const { data: latestItem } = await supabase
+      .from('order_items')
+      .select('order_id')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    resolvedOrderId = latestItem?.order_id || null;
+  }
+
+  const itemsQuery = resolvedOrderId
+    ? supabase.from('order_items').select('product_name, category, quantity').eq('order_id', resolvedOrderId)
+    : supabase.from('order_items').select('product_name, category, quantity').eq('user_id', userId).limit(0);
 
   const [userRes, intentRes, stateRes, itemsRes] = await Promise.all([
     supabase.from('users').select('id, name, email, city').eq('id', userId).single(),
@@ -113,7 +132,7 @@ async function buildUserContext(userId, orderId) {
   if (userRes.error || !userRes.data) throw new Error(`User not found: ${userId}`);
 
   const intent = intentRes.data;
-  const state = stateRes.data;
+  const state  = stateRes.data;
 
   const missingIntentFields = [];
   if (!intent) {
@@ -124,7 +143,7 @@ async function buildUserContext(userId, orderId) {
     if (!intent.diet_pref) missingIntentFields.push('diet_pref');
   }
 
-  const products = itemsRes.data || [];
+  const products       = itemsRes.data || [];
   const sortedProducts = [...products].sort((a, b) => b.quantity - a.quantity);
   const productCategories = [...new Set(sortedProducts.map(p => p.category).filter(Boolean))];
   const productQuantities = {};
@@ -134,27 +153,35 @@ async function buildUserContext(userId, orderId) {
     }
   }
 
-  // PERMANENT FIX: Hard diagnostic log — visible in every plan generation.
-  // If category is blank for any product, it means server.js did not call deriveCategory().
-  // This log will show you the exact data state before taskTemplates runs.
-  const blankCategoryProducts = (itemsRes.data || []).filter(p => !p.category);
+  // Diagnostic log — blank category = server.js did not call deriveCategory()
+  const blankCategoryProducts = products.filter(p => !p.category);
   if (blankCategoryProducts.length > 0) {
-    console.error(`[habitEngine] CONTEXT WARNING: ${blankCategoryProducts.length} product(s) have blank category for user ${userId}:`,
+    console.error(
+      `[habitEngine] CONTEXT WARNING: ${blankCategoryProducts.length} product(s) have blank category for user ${userId}:`,
       blankCategoryProducts.map(p => p.product_name).join(', ')
     );
-    console.error(`[habitEngine] productCategories will be empty → plan will default to peanut_butter. Check deriveCategory() in server.js.`);
+    console.error(`[habitEngine] These products are excluded from plan selection. Fix deriveCategory() in server.js.`);
   }
-  console.log(`[habitEngine] buildUserContext: products=[${(itemsRes.data||[]).map(p=>p.product_name).join(',')}] categories=[${productCategories.join(',')}] quantities=${JSON.stringify(productQuantities)}`);
 
-  const yesterday = getISTDate(-1);
+  const dietPref = intent?.diet_pref || 'veg';
+  console.log(
+    `[habitEngine] buildUserContext: ` +
+    `products=[${products.map(p => p.product_name).join(',')}] ` +
+    `categories=[${productCategories.join(',')}] ` +
+    `quantities=${JSON.stringify(productQuantities)} ` +
+    `diet=${dietPref} ` +
+    `scopedOrderId=${resolvedOrderId || 'none'}`
+  );
+
+  const yesterday      = getISTDate(-1);
   const skippedYesterday = state?.last_completed_date
     ? state.last_completed_date < yesterday
     : false;
 
   return {
-    user: userRes.data,
-    intent: intent || null,
-    state: state || { current_streak: 0, fatigue_score: 0, difficulty_level: 'normal', active_plan_id: null, completed_task_count: 0 },
+    user:    userRes.data,
+    intent:  intent || null,
+    state:   state  || { current_streak: 0, fatigue_score: 0, difficulty_level: 'normal', active_plan_id: null, completed_task_count: 0 },
     products: sortedProducts,
     productCategories,
     productQuantities,
@@ -163,8 +190,8 @@ async function buildUserContext(userId, orderId) {
     hasOrder: products.length > 0,
     userBehavior: {
       skippedYesterday,
-      fatigueScore:   state?.fatigue_score || 0,
-      currentStreak:  state?.current_streak || 0,
+      fatigueScore:   state?.fatigue_score        || 0,
+      currentStreak:  state?.current_streak       || 0,
       completedCount: state?.completed_task_count || 0,
     },
   };
@@ -174,14 +201,14 @@ async function buildUserContext(userId, orderId) {
 // STEP 3 — PLAN TYPE DECISION ENGINE
 // ─────────────────────────────────────────────
 function decidePlanType(context) {
-  const { state, intent, userBehavior } = context;
+  const { intent, userBehavior } = context;
   const fatigue   = userBehavior.fatigueScore;
   const streak    = userBehavior.currentStreak;
   const lifestyle = intent?.lifestyle || 'sedentary';
 
-  if (fatigue > 2) return 'recovery';
+  if (fatigue > 2)                           return 'recovery';
   if (streak > 5 && lifestyle === 'athlete') return 'aggressive';
-  if (streak === 0) return 'beginner';
+  if (streak === 0)                          return 'beginner';
   return 'normal';
 }
 
@@ -219,8 +246,6 @@ function generateTaskRows(planId, userId, context, planType) {
     productQuantities,
   });
 
-  // FIX [3]: Store primary_product and dosage_label as structured fields on the task row.
-  // Never reconstruct product identity from description text later.
   return templateDays.map((day) => ({
     plan_id:         planId,
     user_id:         userId,
@@ -228,8 +253,8 @@ function generateTaskRows(planId, userId, context, planType) {
     scheduled_date:  getISTDate(day.day_number - 1),
     task_type:       day.task_type,
     dosage:          day.dosage,
-    dosage_label:    day.dosage_label   || null,   // e.g. "2 tbsp + 1 banana"
-    primary_product: day.primary_product || null,  // e.g. "protein_bar"
+    dosage_label:    day.dosage_label    || null,
+    primary_product: day.primary_product || null,
     description:     day.description,
     nutrient_focus:  day.nutrient_focus,
     status:          'pending',
@@ -238,19 +263,6 @@ function generateTaskRows(planId, userId, context, planType) {
 
 // ─────────────────────────────────────────────
 // STEP 6 — ATOMIC WRITE
-//
-// ⚠️  FIX: trigger values changed to match habit_plans_trigger_check constraint
-//
-// BEFORE (broken):
-//   trigger: orderId ? 'purchase' : 'signup'
-//   source:  orderId ? 'order-based' : 'alpino'
-//
-// AFTER (fixed):
-//   trigger: orderId ? 'order' : 'signup'
-//   source:  orderId ? 'order' : 'alpino'
-//
-// IF THIS STILL FAILS — run this in Supabase SQL editor and check allowed values:
-//   SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'habit_plans_trigger_check';
 // ─────────────────────────────────────────────
 async function writeToDb({ userId, orderId, context, planType, idempotencyKey }) {
   // 6a. Archive any existing active plan
@@ -259,26 +271,23 @@ async function writeToDb({ userId, orderId, context, planType, idempotencyKey })
   }
 
   // 6b. Create plan
-  // ⚠️  CRITICAL FIX: 'purchase' and 'order-based' violate habit_plans_trigger_check
   const { data: plan, error: planErr } = await supabase
     .from('habit_plans')
     .insert({
       user_id:         userId,
-      order_id:        null,              // ✅ PERMANENT FIX: orderId comes from order_items, not orders table — FK constraint habit_plans_order_id_fkey rejects it. Plan context already uses orderId for task generation.
+      order_id:        null,             // PERMANENT FIX: orderId is from order_items, not orders table FK
       plan_type:       planType,
       start_date:      getISTDate(0),
       status:          'active',
-      trigger:         orderId ? 'order'   : 'signup',  // ✅ matches habit_plans_trigger_check: ['order','signup','recovery']
-      source:          orderId ? 'website' : 'alpino',  // ✅ matches habit_plans_source_check:  ['alpino','website','test','manual']
+      trigger:         orderId ? 'order'   : 'signup',   // matches habit_plans_trigger_check
+      source:          orderId ? 'website' : 'alpino',   // matches habit_plans_source_check
       idempotency_key: idempotencyKey,
     })
     .select('id')
     .single();
 
   if (planErr) {
-    // Log full detail — constraint name is in planErr.message
     console.error(`[habitEngine] habit_plans insert failed for user ${userId}:`, planErr.message);
-    console.error(`[habitEngine] Attempted trigger="${orderId ? 'order' : 'signup'}" source="${orderId ? 'website' : 'alpino'}"`);
     throw new Error(`habit_plans insert failed: ${planErr.message}`);
   }
 
@@ -287,28 +296,73 @@ async function writeToDb({ userId, orderId, context, planType, idempotencyKey })
   // 6c. Generate task rows
   const taskRows = generateTaskRows(planId, userId, context, planType);
 
-  // PERMANENT FIX: Product mismatch guard.
-  // If the user ordered whey but the first task says peanut_butter,
-  // something upstream is broken. Fail loudly — do NOT silently send wrong plan.
+  // ─────────────────────────────────────────────
+  // PRODUCT MISMATCH GUARD — v2.5: fully diet-aware
   //
-  // EXCEPTION: vegan users get whey swapped to peanut_butter by guardDietPref()
-  // in taskTemplates.js — this is intentional and valid, not a mismatch.
+  // Catches bugs where the plan assigns a product the user never ordered.
+  // Does NOT fire on expected diet substitutions (those are valid).
+  //
+  // Logic:
+  //   1. orderedProductKeys  = canonical keys of what user bought
+  //   2. validOutcomes       = orderedProductKeys + their expected diet substitutes
+  //      – 'replace' swap (e.g. whey → peanut_butter for vegan): add replacement
+  //      – 'adapt' swap (e.g. muesli → muesli_vegan): primary_product stays 'muesli'
+  //   3. If day1Task.primary_product ∉ validOutcomes → real bug → abort
+  //
+  // Example: vegan + whey + muesli
+  //   orderedProductKeys = {whey, muesli}
+  //   whey → replace → peanut_butter added to validOutcomes
+  //   muesli → adapt → muesli stays in validOutcomes
+  //   validOutcomes = {whey, muesli, peanut_butter}
+  //   If plan says 'protein_bar' → abort (real bug)
+  //   If plan says 'peanut_butter' → ok (expected vegan swap for whey)
+  //   If plan says 'muesli' → ok (expected vegan muesli adaptation)
+  // ─────────────────────────────────────────────
   if (context.hasOrder && context.productCategories.length > 0) {
-    const CATEGORY_MAP = { whey: 'whey', protein: 'whey', peanut_butter: 'peanut_butter', protein_bar: 'protein_bar', snack: 'protein_bar', muesli: 'muesli' };
-    const expectedProducts = new Set(
-      context.productCategories.map(cat => CATEGORY_MAP[cat] || null).filter(Boolean)
+    const CATEGORY_MAP = {
+      whey:          'whey',
+      peanut_butter: 'peanut_butter',
+      protein_bar:   'protein_bar',
+      muesli:        'muesli',
+      protein:       'whey',
+      snack:         'protein_bar',
+    };
+
+    const dietPref = context.intent?.diet_pref || 'veg';
+
+    const orderedProductKeys = new Set(
+      context.productCategories.map(cat => CATEGORY_MAP[cat]).filter(Boolean)
     );
-    // Vegan diet: guardDietPref() in taskTemplates swaps whey_* -> pb_*
-    // peanut_butter is a valid outcome for a vegan whey buyer.
-    const dietPref = context.intent?.diet_pref || '';
-    if (dietPref === 'vegan' && expectedProducts.has('whey')) {
-      expectedProducts.add('peanut_butter');
+
+    const validOutcomes = new Set(orderedProductKeys);
+
+    for (const productKey of orderedProductKeys) {
+      const rule = PRODUCT_DIET_RULES[productKey];
+      if (!rule) continue;
+      if (rule.allowed_diets.includes(dietPref)) continue;  // not blocked — no swap needed
+
+      const swap = rule.diet_swap?.[dietPref];
+      if (!swap) continue;
+
+      if (swap.action === 'replace') {
+        validOutcomes.add(swap.with);  // e.g. peanut_butter
+      }
+      // 'adapt' keeps the same product key (muesli → muesli) — already in validOutcomes
     }
+
     const day1Task = taskRows.find(t => t.day_number === 1);
-    if (day1Task && day1Task.primary_product && !expectedProducts.has(day1Task.primary_product)) {
-      console.error(`[habitEngine] PRODUCT MISMATCH: user ordered [${[...expectedProducts].join(',')}] but plan assigned ${day1Task.primary_product}. Aborting plan.`);
+    if (day1Task && day1Task.primary_product && !validOutcomes.has(day1Task.primary_product)) {
+      console.error(
+        `[habitEngine] PRODUCT MISMATCH: ordered=[${[...orderedProductKeys].join(',')}]` +
+        ` validOutcomes=[${[...validOutcomes].join(',')}]` +
+        ` plan assigned primary_product="${day1Task.primary_product}"` +
+        ` diet="${dietPref}". Aborting plan.`
+      );
       await supabase.from('habit_plans').delete().eq('id', planId);
-      throw new Error(`Product mismatch: ordered [${[...expectedProducts].join(',')}] but plan uses ${day1Task.primary_product}. Check deriveCategory() and CATEGORY_TO_PRODUCT_KEY.`);
+      throw new Error(
+        `Product mismatch: ordered [${[...orderedProductKeys].join(',')}] but plan uses ${day1Task.primary_product}.` +
+        ` Check deriveCategory() in server.js and CATEGORY_TO_PRODUCT_KEY in taskTemplates.js.`
+      );
     }
   }
 
@@ -316,7 +370,6 @@ async function writeToDb({ userId, orderId, context, planType, idempotencyKey })
   const { error: tasksErr } = await supabase.from('habit_tasks').insert(taskRows);
 
   if (tasksErr) {
-    // COMPENSATE: delete the plan we just created
     await supabase.from('habit_plans').delete().eq('id', planId);
 
     await supabase.from('dead_letters').insert({
@@ -345,15 +398,16 @@ async function writeToDb({ userId, orderId, context, planType, idempotencyKey })
       user_id:    userId,
       event_type: 'plan_generated',
       metadata: {
-        plan_id:                planId,
-        plan_type:              planType,
-        order_id:               orderId || null,
-        products:               context.products.map(p => p.product_name),
-        product_categories:     context.productCategories,
-        goal:                   context.intent?.goal,
-        lifestyle:              context.intent?.lifestyle,
-        streak_at_generation:   context.userBehavior.currentStreak,
-        fatigue_at_generation:  context.userBehavior.fatigueScore,
+        plan_id:               planId,
+        plan_type:             planType,
+        order_id:              orderId || null,
+        products:              context.products.map(p => p.product_name),
+        product_categories:    context.productCategories,
+        goal:                  context.intent?.goal,
+        lifestyle:             context.intent?.lifestyle,
+        diet_pref:             context.intent?.diet_pref,
+        streak_at_generation:  context.userBehavior.currentStreak,
+        fatigue_at_generation: context.userBehavior.fatigueScore,
       },
     });
   } catch (eventErr) {
@@ -494,11 +548,10 @@ async function generateHabitPlan(userId, orderId = null) {
     console.warn(`[habitEngine] Missing intent fields for ${userId}: [${context.missingIntentFields.join(', ')}]. Plan will use safe defaults.`);
   }
 
-  let planId;
   try {
     const planType = decidePlanType(context);
 
-    planId = await writeToDb({
+    const planId = await writeToDb({
       userId,
       orderId,
       context,
@@ -509,9 +562,6 @@ async function generateHabitPlan(userId, orderId = null) {
     console.log(`[habitEngine] Plan ${planId} (${planType}) generated for user ${userId}`);
     return { planId, skipped: false, planType };
   } catch (err) {
-    // PERMANENT FIX: writeToDb failures must land in dead_letters.
-    // Previously this catch did not exist — errors propagated silently,
-    // leaving users with no plan and no retry queue entry (Navneet case).
     console.error(`[habitEngine] writeToDb failed for user ${userId}: ${err.message}`);
     await supabase.from('dead_letters').insert({
       job_type:      'generate_plan',
