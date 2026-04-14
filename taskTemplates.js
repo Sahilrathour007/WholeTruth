@@ -150,28 +150,28 @@ const ACTION_BLOCKS = {
   // ── Peanut Butter — safe for ALL diets ──
   pb_easy: {
     product: 'peanut_butter',
-    product_label: 'Alpino Peanut Butter',
+    product_label: 'Peanut Butter',
     quantity: '2 tbsp on a roti or toast',
     protein_g: 8,
     fallback_type: 'light',
   },
   pb_push: {
     product: 'peanut_butter',
-    product_label: 'Alpino Peanut Butter',
+    product_label: 'Peanut Butter',
     quantity: '2 tbsp + 1 banana',
     protein_g: 9,
     fallback_type: 'protein',
   },
   pb_push_high: {
     product: 'peanut_butter',
-    product_label: 'Alpino Peanut Butter',
+    product_label: 'Peanut Butter',
     quantity: '3 tbsp stirred into 50g oats (dry weight)',
     protein_g: 13,
     fallback_type: 'carb_pro',
   },
   pb_recovery: {
     product: 'peanut_butter',
-    product_label: 'Alpino Peanut Butter',
+    product_label: 'Peanut Butter',
     quantity: '1 tbsp stirred into dal or sabzi',
     protein_g: 4,
     fallback_type: 'light',
@@ -212,14 +212,14 @@ const ACTION_BLOCKS = {
   // ── Protein Bar — veg + non_veg only. Blocked for vegan. ──
   bar_easy: {
     product: 'protein_bar',
-    product_label: 'Alpino Protein Bar',
+    product_label: 'Protein Bar',
     quantity: '1 bar',
     protein_g: 15,
     fallback_type: 'light',
   },
   bar_push: {
     product: 'protein_bar',
-    product_label: 'Alpino Protein Bar',
+    product_label: 'Protein Bar',
     quantity: '1 bar immediately after finishing your workout',
     protein_g: 15,
     fallback_type: 'protein',
@@ -228,21 +228,21 @@ const ACTION_BLOCKS = {
   // ── Muesli — veg + non_veg: cow's milk. Vegan: soy milk (separate block). ──
   muesli_easy: {
     product: 'muesli',
-    product_label: 'Alpino Muesli',
+    product_label: 'Muesli',
     quantity: '60g with 200ml milk',
     protein_g: 12,
     fallback_type: 'carb_pro',
   },
   muesli_push: {
     product: 'muesli',
-    product_label: 'Alpino Muesli',
+    product_label: 'Muesli',
     quantity: '80g with 250ml milk + 1 banana sliced in',
     protein_g: 15,
     fallback_type: 'carb_pro',
   },
   muesli_recovery: {
     product: 'muesli',
-    product_label: 'Alpino Muesli',
+    product_label: 'Muesli',
     quantity: '50g with 200ml milk — light bowl',
     protein_g: 10,
     fallback_type: 'carb_pro',
@@ -252,14 +252,14 @@ const ACTION_BLOCKS = {
   // This is an adaptation (not a rejection) — user still uses their product.
   muesli_vegan: {
     product: 'muesli',
-    product_label: 'Alpino Muesli',
+    product_label: 'Muesli',
     quantity: '60g with 200ml unsweetened soy milk',
     protein_g: 11,
     fallback_type: 'carb_pro',
   },
   muesli_vegan_push: {
     product: 'muesli',
-    product_label: 'Alpino Muesli',
+    product_label: 'Muesli',
     quantity: '80g with 250ml soy milk + 1 banana sliced in',
     protein_g: 14,
     fallback_type: 'carb_pro',
