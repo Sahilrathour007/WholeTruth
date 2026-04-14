@@ -1,19 +1,88 @@
 // ============================================================
-// taskTemplates.js — Behavioral Engine v4
+// taskTemplates.js — Behavioral Engine v5
 //
-// Fixes from v3 review:
-//   1. One anchor timing per lifestyle — gym=post_workout, student=morning, home=evening
-//   2. Primary product by quantity (g), not array order
-//   3. Multi-product rotation — secondary product surfaces on Day 3/6
-//   4. Fallback friction — fallback requires effort, not "just eat curd"
-//   5. diet_pref enforced — vegan gets no dairy/whey, veg gets no eggs
-//   6. dosage float removed — dosage_label = real quantity string
-//   7. Reflection day = identity only, no task instruction
+// What changed from v4:
+//   v5.1 — DIET-AWARE PRODUCT SELECTION (root fix)
+//     • selectPrimaryProduct() now filters by diet compatibility BEFORE
+//       picking the top product. A vegan user ordering whey+muesli will
+//       never get whey or dairy-muesli as primary — peanut_butter is
+//       chosen as the first compatible product instead.
+//     • selectSecondaryProduct() applies the same diet filter.
+//
+//   v5.2 — COMPLETE DIET GUARD (guardDietPref expanded)
+//     • Previously only whey was blocked for vegan.
+//     • Now: muesli (milk-based) and protein_bar (contains whey/milk)
+//       are ALSO blocked for vegan.
+//     • veg diet: no eggs in fallback (already correct, kept).
+//     • non_veg: all products allowed.
+//
+//   v5.3 — VEGAN MUESLI ADAPTATION (not rejection)
+//     • Vegan + muesli order → "60g Alpino Muesli with 200ml soy milk"
+//       (adaptation, not a blocked fallback).
+//     • New action block: muesli_vegan — same product, soy milk swap.
+//
+//   v5.4 — PRODUCT RULE TABLE (single source of truth)
+//     • PRODUCT_DIET_RULES defines which diets each product is allowed
+//       for and what the correct diet-swap is.
+//     • All selection + guard logic reads from this table.
+//     • To add a new product: add one entry here, nowhere else.
+//
+//   v5.5 — WHEY BLOCK: quantity instruction also fixed
+//     • whey_easy was "1 scoop in 200ml MILK" — dairy, not just whey.
+//       Changed to water. Dairy-specific instruction only shown to veg/non_veg.
 //
 // Out of scope here (belongs in habitEngine.js):
 //   - Consumption tracking (DB write)
 //   - Reorder trigger (DB + notification layer)
 // ============================================================
+
+
+// ─────────────────────────────────────────────
+// PRODUCT DIET RULES — single source of truth
+//
+// allowed_diets: diets for which this product CAN be used as-is
+// swap: what to do when the product is blocked by diet
+//   swap.block = 'vegan'        → block for vegan users
+//   swap.product = 'pb'         → replace with this product key
+//   swap.adapt   = 'muesli_vegan' → use a diet-adapted block instead of blocking
+//
+// To add a new product: add one entry here. That's it.
+// ─────────────────────────────────────────────
+const PRODUCT_DIET_RULES = {
+  whey: {
+    allowed_diets: ['veg', 'non_veg'],    // dairy-based
+    diet_swap: {
+      vegan: { action: 'replace', with: 'peanut_butter' },
+    },
+  },
+  peanut_butter: {
+    allowed_diets: ['veg', 'vegan', 'non_veg'],  // universally safe
+    diet_swap: {},
+  },
+  protein_bar: {
+    // Assume Alpino bars contain whey/milk solids — treat as non-vegan
+    // If a vegan-certified bar is added later, update this entry.
+    allowed_diets: ['veg', 'non_veg'],
+    diet_swap: {
+      vegan: { action: 'replace', with: 'peanut_butter' },
+    },
+  },
+  muesli: {
+    // Standard muesli uses cow's milk — not vegan as-is.
+    // BUT: vegan users can use soy milk → adapt, not reject.
+    allowed_diets: ['veg', 'non_veg'],
+    diet_swap: {
+      vegan: { action: 'adapt', with: 'muesli_vegan' },  // soy milk version
+    },
+  },
+};
+
+// Helper: is a product allowed for a given diet?
+function isProductAllowedForDiet(productKey, diet_pref) {
+  const rule = PRODUCT_DIET_RULES[productKey];
+  if (!rule) return true; // unknown product → don't block
+  return rule.allowed_diets.includes(diet_pref);
+}
 
 
 // ─────────────────────────────────────────────
@@ -36,6 +105,7 @@ const TIMING_LABEL = {
 
 // ─────────────────────────────────────────────
 // DIET-SAFE FALLBACK MAP
+// Used when the user has no compatible product OR as the "OR" option in emails.
 // Fallback rule: must require effort (not just "grab curd")
 // veg: no eggs / non_veg: eggs ok / vegan: no dairy or whey
 // ─────────────────────────────────────────────
@@ -52,8 +122,8 @@ const DIET_FALLBACK = {
   },
   vegan: {
     protein:  { item: 'cook 150g tofu scramble (takes 10 mins)',              protein_g: 15 },
-    light:    { item: 'soak + eat 30g roasted chana (needs overnight prep)',   protein_g: 8  },
-    carb_pro: { item: 'blend 1 glass soy milk + banana',                      protein_g: 9  },
+    light:    { item: 'eat 30g roasted chana with lemon + chaat masala',      protein_g: 8  },
+    carb_pro: { item: 'blend 1 glass soy milk + 1 banana',                    protein_g: 9  },
   },
 };
 
@@ -65,11 +135,11 @@ const DIET_FALLBACK = {
 // ─────────────────────────────────────────────
 const ACTION_BLOCKS = {
 
-  // ── Peanut Butter ──
+  // ── Peanut Butter — safe for ALL diets ──
   pb_easy: {
     product: 'peanut_butter',
     product_label: 'Alpino Peanut Butter',
-    quantity: '2 tbsp',
+    quantity: '2 tbsp on a roti or toast',
     protein_g: 8,
     fallback_type: 'light',
   },
@@ -95,12 +165,14 @@ const ACTION_BLOCKS = {
     fallback_type: 'light',
   },
 
-  // ── Whey (blocked for vegan at runtime) ──
+  // ── Whey — veg + non_veg only. Blocked for vegan. ──
+  // FIX v5.5: base instruction uses water (not milk) — milk is offered as a
+  // performance upgrade note for veg/non_veg inside the description, not baked in.
   whey_easy: {
     product: 'whey',
     product_label: 'Whey Protein',
-    quantity: '1 scoop in 200ml milk',
-    protein_g: 28,
+    quantity: '1 scoop in 250ml water (or 200ml milk for more protein)',
+    protein_g: 24,
     fallback_type: 'protein',
   },
   whey_push: {
@@ -117,24 +189,31 @@ const ACTION_BLOCKS = {
     protein_g: 36,
     fallback_type: 'protein',
   },
+  whey_recovery: {
+    product: 'whey',
+    product_label: 'Whey Protein',
+    quantity: '1 scoop in 300ml water — sip slowly',
+    protein_g: 24,
+    fallback_type: 'light',
+  },
 
-  // ── Protein Bar ──
+  // ── Protein Bar — veg + non_veg only. Blocked for vegan. ──
   bar_easy: {
     product: 'protein_bar',
-    product_label: 'Protein Bar',
+    product_label: 'Alpino Protein Bar',
     quantity: '1 bar',
     protein_g: 15,
     fallback_type: 'light',
   },
   bar_push: {
     product: 'protein_bar',
-    product_label: 'Protein Bar',
-    quantity: '1 bar immediately after finishing',
+    product_label: 'Alpino Protein Bar',
+    quantity: '1 bar immediately after finishing your workout',
     protein_g: 15,
     fallback_type: 'protein',
   },
 
-  // ── Muesli ──
+  // ── Muesli — veg + non_veg: cow's milk. Vegan: soy milk (separate block). ──
   muesli_easy: {
     product: 'muesli',
     product_label: 'Alpino Muesli',
@@ -142,11 +221,44 @@ const ACTION_BLOCKS = {
     protein_g: 12,
     fallback_type: 'carb_pro',
   },
+  muesli_push: {
+    product: 'muesli',
+    product_label: 'Alpino Muesli',
+    quantity: '80g with 250ml milk + 1 banana sliced in',
+    protein_g: 15,
+    fallback_type: 'carb_pro',
+  },
+  muesli_recovery: {
+    product: 'muesli',
+    product_label: 'Alpino Muesli',
+    quantity: '50g with 200ml milk — light bowl',
+    protein_g: 10,
+    fallback_type: 'carb_pro',
+  },
+  // FIX v5.3: Vegan muesli adaptation — soy milk, same product.
+  // Used when diet=vegan AND muesli is the ordered product.
+  // This is an adaptation (not a rejection) — user still uses their product.
+  muesli_vegan: {
+    product: 'muesli',
+    product_label: 'Alpino Muesli',
+    quantity: '60g with 200ml unsweetened soy milk',
+    protein_g: 11,
+    fallback_type: 'carb_pro',
+  },
+  muesli_vegan_push: {
+    product: 'muesli',
+    product_label: 'Alpino Muesli',
+    quantity: '80g with 250ml soy milk + 1 banana sliced in',
+    protein_g: 14,
+    fallback_type: 'carb_pro',
+  },
 };
 
 
 // ─────────────────────────────────────────────
 // PRODUCT → BLOCK MAP
+// Maps product key + day type → action block key.
+// All day types must be covered (no silent gaps).
 // ─────────────────────────────────────────────
 const PRODUCT_BLOCK_MAP = {
   peanut_butter: {
@@ -160,7 +272,7 @@ const PRODUCT_BLOCK_MAP = {
     easy:       'whey_easy',
     push:       'whey_push',
     push_high:  'whey_push_high',
-    recovery:   'pb_recovery',    // no whey on recovery — use PB light
+    recovery:   'whey_recovery',
     comeback:   'whey_easy',
   },
   protein_bar: {
@@ -172,9 +284,9 @@ const PRODUCT_BLOCK_MAP = {
   },
   muesli: {
     easy:       'muesli_easy',
-    push:       'muesli_easy',
-    push_high:  'muesli_easy',
-    recovery:   'muesli_easy',
+    push:       'muesli_push',
+    push_high:  'muesli_push',
+    recovery:   'muesli_recovery',
     comeback:   'muesli_easy',
   },
 };
@@ -182,62 +294,132 @@ const PRODUCT_BLOCK_MAP = {
 
 // ─────────────────────────────────────────────
 // CATEGORY → PRODUCT KEY MAP
-// Your DB stores category as 'protein' or 'snack'.
-// PRODUCT_BLOCK_MAP uses keys like 'peanut_butter', 'protein_bar', 'whey', 'muesli'.
-// This map translates. Without it, every lookup falls back to peanut_butter.
+// DB stores category as canonical strings.
+// PRODUCT_BLOCK_MAP uses keys: 'peanut_butter', 'protein_bar', 'whey', 'muesli'.
+// This map translates. Without it every lookup silently falls back to peanut_butter.
 // ─────────────────────────────────────────────
 const CATEGORY_TO_PRODUCT_KEY = {
-  protein: 'whey',          // generic protein → whey as default protein product
-  snack:   'protein_bar',   // generic snack → protein bar
-  whey:    'whey',
+  // Exact canonical values (set by deriveCategory in server.js)
+  whey:          'whey',
   peanut_butter: 'peanut_butter',
   protein_bar:   'protein_bar',
   muesli:        'muesli',
+  // Legacy / generic values that may exist in older rows
+  protein:       'whey',
+  snack:         'protein_bar',
 };
 
+
 // ─────────────────────────────────────────────
-// PRIMARY PRODUCT SELECTOR
-// Fix: quantity-based, not array[0]
+// DIET GUARD — resolves a block key to a diet-safe alternative
+//
+// v5: now handles all blocked products, not just whey.
+// Reading order:
+//   1. Look up the block in ACTION_BLOCKS.
+//   2. Check PRODUCT_DIET_RULES for the block's product.
+//   3. If diet_swap.action === 'adapt', use the adapted block key directly.
+//   4. If diet_swap.action === 'replace', remap to the replacement product's
+//      block for the same day type.
+//   5. If no swap needed, return original blockKey.
 // ─────────────────────────────────────────────
-function selectPrimaryProduct(productCategories, productQuantities) {
-  if (!productCategories || productCategories.length === 0) return 'peanut_butter';
-  const topCategory = [...productCategories].sort(
-    (a, b) => (productQuantities[b] || 0) - (productQuantities[a] || 0)
-  )[0];
-  // Translate DB category value to a PRODUCT_BLOCK_MAP key
-  return CATEGORY_TO_PRODUCT_KEY[topCategory] || 'peanut_butter';
+function guardDietPref(blockKey, diet_pref, dayType) {
+  const block = ACTION_BLOCKS[blockKey];
+  if (!block) return blockKey; // unknown block — pass through
+
+  const rule = PRODUCT_DIET_RULES[block.product];
+  if (!rule) return blockKey; // no rule — pass through
+
+  if (rule.allowed_diets.includes(diet_pref)) return blockKey; // allowed — no swap needed
+
+  const swap = rule.diet_swap?.[diet_pref];
+  if (!swap) return blockKey; // no swap defined — pass through (should not happen)
+
+  if (swap.action === 'adapt') {
+    // Use a diet-adapted block for the same product (e.g. muesli_vegan)
+    // If the adapted block exists, use it; otherwise fall back to replace logic.
+    if (ACTION_BLOCKS[swap.with]) return swap.with;
+  }
+
+  if (swap.action === 'replace' || swap.action === 'adapt') {
+    // Replace with the first diet-safe product's block for this day type
+    const replacementProduct = swap.with; // e.g. 'peanut_butter'
+    const replacementBlockMap = PRODUCT_BLOCK_MAP[replacementProduct];
+    if (replacementBlockMap) {
+      return replacementBlockMap[dayType] || replacementBlockMap['easy'];
+    }
+  }
+
+  // Final safety net
+  return PRODUCT_BLOCK_MAP['peanut_butter'][dayType] || 'pb_easy';
 }
 
 
 // ─────────────────────────────────────────────
-// SECONDARY PRODUCT SURFACER
-// Surfaces on Day 3 + Day 6 (push days — user is engaged)
-// Always secondary to primary — never replaces it
+// PRIMARY PRODUCT SELECTOR — diet-aware
+//
+// v5 FIX: Filter by diet BEFORE picking the top product.
+// Priority order:
+//   1. Products the user ordered that are compatible with their diet
+//   2. If none compatible → peanut_butter (universally safe)
+//   3. Quantity-ranked within compatible set
 // ─────────────────────────────────────────────
-function getSecondaryProduct(productCategories, primaryProductKey, absoluteDayNumber) {
+function selectPrimaryProduct(productCategories, productQuantities, diet_pref) {
+  if (!productCategories || productCategories.length === 0) return 'peanut_butter';
+
+  // Translate categories → product keys
+  const productKeys = [...new Set(
+    productCategories
+      .map(cat => CATEGORY_TO_PRODUCT_KEY[cat])
+      .filter(Boolean)
+  )];
+
+  if (productKeys.length === 0) return 'peanut_butter';
+
+  // Filter to only diet-compatible products
+  const compatibleKeys = productKeys.filter(key => isProductAllowedForDiet(key, diet_pref));
+
+  // If nothing is compatible (e.g. vegan orders only whey + protein_bar):
+  // peanut_butter is universally safe and is always in PRODUCT_BLOCK_MAP
+  if (compatibleKeys.length === 0) {
+    console.warn(`[taskTemplates] No diet-compatible product found for diet="${diet_pref}" from [${productKeys.join(',')}]. Defaulting to peanut_butter.`);
+    return 'peanut_butter';
+  }
+
+  // Rank by quantity (highest first) within compatible set
+  // productQuantities keys are category strings, so we need to map back
+  const categoryForKey = {};
+  for (const cat of productCategories) {
+    const key = CATEGORY_TO_PRODUCT_KEY[cat];
+    if (key && !categoryForKey[key]) categoryForKey[key] = cat;
+  }
+
+  const topKey = [...compatibleKeys].sort((a, b) => {
+    const qtyA = productQuantities[categoryForKey[a]] || 0;
+    const qtyB = productQuantities[categoryForKey[b]] || 0;
+    return qtyB - qtyA;
+  })[0];
+
+  return topKey;
+}
+
+
+// ─────────────────────────────────────────────
+// SECONDARY PRODUCT SURFACER — diet-aware
+// Surfaces on Day 3 + Day 6 (push days — user is engaged)
+// Never replaces primary — only adds a tip line
+// ─────────────────────────────────────────────
+function getSecondaryProduct(productCategories, primaryProductKey, absoluteDayNumber, diet_pref) {
   if (!productCategories || productCategories.length < 2) return null;
   const cyclePos = ((absoluteDayNumber - 1) % 7) + 1;
   if (cyclePos !== 3 && cyclePos !== 6) return null;
-  // Find a secondary category that maps to a different product key than the primary
-  const secondaryCategory = productCategories.find(
-    cat => (CATEGORY_TO_PRODUCT_KEY[cat] || 'peanut_butter') !== primaryProductKey
-  );
+
+  // Find a secondary category that maps to a different diet-safe product key
+  const secondaryCategory = productCategories.find(cat => {
+    const key = CATEGORY_TO_PRODUCT_KEY[cat] || 'peanut_butter';
+    return key !== primaryProductKey && isProductAllowedForDiet(key, diet_pref);
+  });
+
   return secondaryCategory ? (CATEGORY_TO_PRODUCT_KEY[secondaryCategory] || null) : null;
-}
-
-
-// ─────────────────────────────────────────────
-// VEGAN / DIET GUARD
-// Whey = dairy → blocked for vegan
-// ─────────────────────────────────────────────
-function guardDietPref(blockKey, diet_pref) {
-  const block = ACTION_BLOCKS[blockKey];
-  if (!block) return blockKey;
-  if (diet_pref === 'vegan' && block.product === 'whey') {
-    const swap = { whey_easy: 'pb_easy', whey_push: 'pb_push', whey_push_high: 'pb_push_high' };
-    return swap[blockKey] || 'pb_easy';
-  }
-  return blockKey;
 }
 
 
@@ -382,6 +564,7 @@ function getTaskForDay({
       task_type:      'reflection',
       dosage:         null,
       dosage_label:   null,
+      primary_product: null,
       description:    buildReflectionBody({
         identity:      IDENTITY_LINES[safeLifestyle].reflection,
         memoryPrefix:  getMemoryPrefix(behavior),
@@ -390,28 +573,39 @@ function getTaskForDay({
     };
   }
 
-  // Primary product — quantity-ranked
-  const primaryProduct = selectPrimaryProduct(productCategories, productQuantities);
+  // Primary product — diet-aware, quantity-ranked
+  // v5 FIX: diet compatibility is checked BEFORE picking top product
+  const primaryProduct = selectPrimaryProduct(productCategories, productQuantities, safeDiet);
 
-  // Block selection with diet guard
+  // Block selection — get raw block for this product + day type
   const productMap  = PRODUCT_BLOCK_MAP[primaryProduct] || PRODUCT_BLOCK_MAP['peanut_butter'];
   const rawBlockKey = productMap[dayType] || productMap['easy'];
-  const blockKey    = guardDietPref(rawBlockKey, safeDiet);
-  const block       = ACTION_BLOCKS[blockKey];
+
+  // Apply diet guard — handles adapt (muesli_vegan) and replace (whey → pb) cases
+  const blockKey = guardDietPref(rawBlockKey, safeDiet, dayType);
+  const block    = ACTION_BLOCKS[blockKey];
+
+  if (!block) {
+    // Should never happen — log loudly and use safe fallback
+    console.error(`[taskTemplates] MISSING ACTION BLOCK: key="${blockKey}" product="${primaryProduct}" day=${absoluteDayNumber} diet="${safeDiet}". Using pb_easy.`);
+    const safeBlock = ACTION_BLOCKS['pb_easy'];
+    return buildTaskResult({ absoluteDayNumber, dayType, safeLifestyle, safeDiet, block: safeBlock, productCategories, primaryProduct: 'peanut_butter', absoluteDayNumber, behavior, productQuantities });
+  }
 
   // Fallback — diet-aware, friction-based
-  const fallbackDef  = DIET_FALLBACK[safeDiet][block.fallback_type] || DIET_FALLBACK[safeDiet].protein;
+  const fallbackDef = DIET_FALLBACK[safeDiet][block.fallback_type] || DIET_FALLBACK[safeDiet].light;
 
   // Anchor timing — consistent per lifestyle
   const anchorTiming = dayType === 'recovery' ? 'anytime' : (LIFESTYLE_ANCHOR[safeLifestyle] || 'evening_snack');
   const anchor_label = TIMING_LABEL[anchorTiming];
 
-  // Secondary product line
-  const secondaryProduct = getSecondaryProduct(productCategories, primaryProduct, absoluteDayNumber);
+  // Secondary product line — diet-aware
+  const secondaryProduct = getSecondaryProduct(productCategories, primaryProduct, absoluteDayNumber, safeDiet);
   let secondary_line = null;
   if (secondaryProduct) {
     const secMap      = PRODUCT_BLOCK_MAP[secondaryProduct] || PRODUCT_BLOCK_MAP['peanut_butter'];
-    const secBlockKey = guardDietPref(secMap[dayType] || secMap['push'], safeDiet);
+    const secRawKey   = secMap[dayType] || secMap['push'];
+    const secBlockKey = guardDietPref(secRawKey, safeDiet, dayType);
     const secBlock    = ACTION_BLOCKS[secBlockKey];
     if (secBlock) {
       secondary_line = `💡 Also have ${secBlock.product_label}? Stack: add ${secBlock.quantity} — works well today.`;
@@ -435,7 +629,7 @@ function getTaskForDay({
     task_type:       dayType,
     dosage:          null,
     dosage_label:    block.quantity,
-    primary_product: block.product,   // FIX [3]: normalized product key, stored on task row
+    primary_product: block.product,  // always the actual product in the task (after any diet swap)
     description,
     nutrient_focus:  'protein',
   };
@@ -462,4 +656,4 @@ function getTemplate({ goal, lifestyle, diet_pref, plan_type, productCategories 
   );
 }
 
-module.exports = { getTemplate, getTaskForDay };
+module.exports = { getTemplate, getTaskForDay, isProductAllowedForDiet, PRODUCT_DIET_RULES };
