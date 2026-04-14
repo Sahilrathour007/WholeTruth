@@ -77,11 +77,23 @@ const PRODUCT_DIET_RULES = {
   },
 };
 
-// Helper: is a product allowed for a given diet?
+// Helper: is a product usable for a given diet?
+// "Usable" = allowed as-is OR adaptable (a diet-safe block variant exists).
+// Only truly blocked products (action: 'replace') return false.
 function isProductAllowedForDiet(productKey, diet_pref) {
   const rule = PRODUCT_DIET_RULES[productKey];
   if (!rule) return true; // unknown product → don't block
-  return rule.allowed_diets.includes(diet_pref);
+
+  if (rule.allowed_diets.includes(diet_pref)) return true; // allowed as-is
+
+  const swap = rule.diet_swap?.[diet_pref];
+  if (!swap) return true; // no rule defined → don't block
+
+  // 'adapt' = product stays, instruction changes → still usable
+  if (swap.action === 'adapt') return true;
+
+  // 'replace' = product is incompatible → blocked
+  return false;
 }
 
 
@@ -335,9 +347,13 @@ function guardDietPref(blockKey, diet_pref, dayType) {
   if (!swap) return blockKey; // no swap defined — pass through (should not happen)
 
   if (swap.action === 'adapt') {
-    // Use a diet-adapted block for the same product (e.g. muesli_vegan)
-    // If the adapted block exists, use it; otherwise fall back to replace logic.
+    // Use a diet-adapted block for the same product (e.g. muesli_vegan).
+    // Try day-type specific variant first (muesli_vegan_push), then base adapted
+    // block (muesli_vegan), then fall through to replace logic if neither exists.
+    const adaptedVariant = `${swap.with}_${dayType}`;
+    if (ACTION_BLOCKS[adaptedVariant]) return adaptedVariant;
     if (ACTION_BLOCKS[swap.with]) return swap.with;
+    // No adapted block found — fall through to replace logic below
   }
 
   if (swap.action === 'replace' || swap.action === 'adapt') {
