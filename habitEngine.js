@@ -134,6 +134,18 @@ async function buildUserContext(userId, orderId) {
     }
   }
 
+  // PERMANENT FIX: Hard diagnostic log — visible in every plan generation.
+  // If category is blank for any product, it means server.js did not call deriveCategory().
+  // This log will show you the exact data state before taskTemplates runs.
+  const blankCategoryProducts = (itemsRes.data || []).filter(p => !p.category);
+  if (blankCategoryProducts.length > 0) {
+    console.error(`[habitEngine] CONTEXT WARNING: ${blankCategoryProducts.length} product(s) have blank category for user ${userId}:`,
+      blankCategoryProducts.map(p => p.product_name).join(', ')
+    );
+    console.error(`[habitEngine] productCategories will be empty → plan will default to peanut_butter. Check deriveCategory() in server.js.`);
+  }
+  console.log(`[habitEngine] buildUserContext: products=[${(itemsRes.data||[]).map(p=>p.product_name).join(',')}] categories=[${productCategories.join(',')}] quantities=${JSON.stringify(productQuantities)}`);
+
   const yesterday = getISTDate(-1);
   const skippedYesterday = state?.last_completed_date
     ? state.last_completed_date < yesterday
@@ -274,6 +286,24 @@ async function writeToDb({ userId, orderId, context, planType, idempotencyKey })
 
   // 6c. Generate task rows
   const taskRows = generateTaskRows(planId, userId, context, planType);
+
+  // PERMANENT FIX: Product mismatch guard.
+  // If the user ordered whey but the first task says peanut_butter,
+  // something upstream is broken. Fail loudly — do NOT silently send wrong plan.
+  if (context.hasOrder && context.productCategories.length > 0) {
+    const expectedProducts = new Set(
+      context.productCategories.map(cat => {
+        const map = { whey: 'whey', protein: 'whey', peanut_butter: 'peanut_butter', protein_bar: 'protein_bar', snack: 'protein_bar', muesli: 'muesli' };
+        return map[cat] || null;
+      }).filter(Boolean)
+    );
+    const day1Task = taskRows.find(t => t.day_number === 1);
+    if (day1Task && day1Task.primary_product && !expectedProducts.has(day1Task.primary_product)) {
+      console.error(`[habitEngine] PRODUCT MISMATCH: user ordered [${[...expectedProducts].join(',')}] but plan assigned ${day1Task.primary_product}. Aborting plan.`);
+      await supabase.from('habit_plans').delete().eq('id', planId);
+      throw new Error(`Product mismatch: ordered [${[...expectedProducts].join(',')}] but plan uses ${day1Task.primary_product}. Check deriveCategory() and CATEGORY_TO_PRODUCT_KEY.`);
+    }
+  }
 
   // 6d. Insert all tasks
   const { error: tasksErr } = await supabase.from('habit_tasks').insert(taskRows);
