@@ -1,5 +1,5 @@
 // =============================================================
-//  THE WHOLE TRUTH — BACKEND v4.5
+//  THE WHOLE TRUTH — BACKEND v4.6
 //  WHAT CHANGED FROM v4.4:
 //  [BUG FIX] /habit/signup had 3 compounding errors:
 //      1. duplicate `const resolvedOrderId` declaration → SyntaxError, entire route crashes
@@ -152,24 +152,44 @@ function validateOrderItem(item) {
 // (habitEngine → taskTemplates → email content).
 // If you add a new product, add it here. Nowhere else.
 const PRODUCT_NAME_TO_CATEGORY = {
-  // Whey variants
-  'whey':              'whey',
-  'whey protein':      'whey',
-  'alpino whey':       'whey',
-  'whey protein powder': 'whey',
-  // Peanut butter variants
-  'peanut butter':     'peanut_butter',
-  'alpino peanut butter': 'peanut_butter',
-  'crunchy peanut butter': 'peanut_butter',
-  'smooth peanut butter':  'peanut_butter',
-  // Protein bar variants
-  'protein bar':       'protein_bar',
-  'alpino protein bar': 'protein_bar',
-  'choco protein bar': 'protein_bar',
-  // Muesli variants
-  'muesli':            'muesli',
-  'alpino muesli':     'muesli',
-  'fruit muesli':      'muesli',
+  // ── Whey variants ──────────────────────────────────────────────
+  'whey':                    'whey',
+  'whey protein':            'whey',
+  'alpino whey':             'whey',
+  'alpino whey protein':     'whey',
+  'whey protein powder':     'whey',
+  'alpino whey protein powder': 'whey',
+  'whey isolate':            'whey',
+  'whey concentrate':        'whey',
+
+  // ── Peanut butter variants ──────────────────────────────────────
+  'peanut butter':             'peanut_butter',
+  'alpino peanut butter':      'peanut_butter',
+  'crunchy peanut butter':     'peanut_butter',
+  'smooth peanut butter':      'peanut_butter',
+  'natural peanut butter':     'peanut_butter',
+  'pb':                        'peanut_butter',
+  'peanut butter powder':      'peanut_butter',
+
+  // ── Protein bar variants ────────────────────────────────────────
+  'protein bar':               'protein_bar',
+  'alpino protein bar':        'protein_bar',
+  'choco protein bar':         'protein_bar',
+  'chocolate protein bar':     'protein_bar',
+  'peanut butter protein bar': 'protein_bar',
+  'energy bar':                'protein_bar',
+  'nutrition bar':             'protein_bar',
+
+  // ── Muesli variants (including common misspellings) ─────────────
+  'muesli':                    'muesli',
+  'museli':                    'muesli',   // FIX: common misspelling
+  'mueseli':                   'muesli',   // FIX: common misspelling
+  'alpino muesli':             'muesli',
+  'alpino museli':             'muesli',   // FIX: misspelled brand variant
+  'fruit muesli':              'muesli',
+  'crunchy muesli':            'muesli',
+  'oat muesli':                'muesli',
+  'breakfast muesli':          'muesli',
 };
 
 function deriveCategory(productName) {
@@ -1389,7 +1409,7 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n The Whole Truth API v4.5 on port ${PORT}`);
+  console.log(`\n The Whole Truth API v4.6 on port ${PORT}`);
   console.log(`   Gmail:     ${process.env.GMAIL_USER      ? 'set: ' + process.env.GMAIL_USER : 'not set'}`);
   console.log(`   Sheets:    ${GOOGLE_SCRIPT_URL            ? 'set' : 'not set'}`);
   console.log(`   Supabase:  ${SUPABASE_URL                 ? 'set' : 'not set'}`);
