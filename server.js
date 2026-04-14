@@ -644,7 +644,7 @@ app.post('/habit/signup', async (req, res) => {
     } else {
       const { data: newUser, error: insertErr } = await supabase
         .from('users').insert({ name, email, phone: phone || '' }).select('id').single();
-      if (insertErr) throw insertErr;
+      if (insertErr) throw new Error(`users insert failed: ${insertErr.message}`);
       userId = newUser.id;
     }
 
