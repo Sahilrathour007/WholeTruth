@@ -882,14 +882,20 @@ app.post('/cron/daily-tasks', cronGuard, async (req, res) => {
     }
 
     const { error: insertErr } = await supabase.from('job_queue').insert({
-      type:       'send_daily_email',
-      task_id:    task.id,
-      user_id:    task.user_id,
-      status:     'pending',
-      attempts:   0,
-      run_id:     runId,
-      created_at: new Date().toISOString(),
-    });
+  type:       'send_daily_email',
+  task_id:    task.id,
+  user_id:    task.user_id,
+  payload: {                          // ← ADD THIS
+    task_id:    task.id,
+    user_id:    task.user_id,
+    user_email: task.users.email,
+    user_name:  task.users.name,
+  },
+  status:     'pending',
+  attempts:   0,
+  run_id:     runId,
+  created_at: new Date().toISOString(),
+});
 
     if (insertErr) {
       console.error(`[CRON] Failed to enqueue task ${task.id}:`, insertErr.message);
