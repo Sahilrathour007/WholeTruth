@@ -388,7 +388,7 @@ async function sendDay1TaskEmail(userId, userEmail, userName) {
     expires_at: expiresAt,
   });
 
-  const completionUrl = `https://sahilrathour007.github.io/Alpino_Retention_Webpage/alpino_journey.html?t=${token}`;
+  const completionUrl = `https://sahilrathour007.github.io/TWT_Retention_Webpage/alpino_journey.html?t=${token}`;
 
   const { data: emailLogRow } = await supabase.from('email_log').insert({
     user_id:    userId,
@@ -741,7 +741,7 @@ app.get('/complete', async (req, res) => {
   const { task_id, user_id, used } = tokenRow;
 
   if (used) {
-    return res.redirect(`https://sahilrathour007.github.io/Alpino_Retention_Webpage/alpino_journey.html?t=${t}`);
+    return res.redirect(`https://sahilrathour007.github.io/TWT_Retention_Webpage/alpino_journey.html?t=${t}`);
   }
 
   const { data: task } = await supabase
@@ -791,7 +791,7 @@ app.get('/complete', async (req, res) => {
     }
   }
 
-  res.redirect(`https://sahilrathour007.github.io/Alpino_Retention_Webpage/alpino_journey.html?t=${t}`);
+  res.redirect(`https://sahilrathour007.github.io/TWT_Retention_Webpage/alpino_journey.html?t=${t}`);
 });
 
 async function triggerReorderEmail(userId, taskId) {
@@ -882,20 +882,14 @@ app.post('/cron/daily-tasks', cronGuard, async (req, res) => {
     }
 
     const { error: insertErr } = await supabase.from('job_queue').insert({
-  type:       'send_daily_email',
-  task_id:    task.id,
-  user_id:    task.user_id,
-  payload: {                          // ← ADD THIS
-    task_id:    task.id,
-    user_id:    task.user_id,
-    user_email: task.users.email,
-    user_name:  task.users.name,
-  },
-  status:     'pending',
-  attempts:   0,
-  run_id:     runId,
-  created_at: new Date().toISOString(),
-});
+      type:       'send_daily_email',
+      task_id:    task.id,
+      user_id:    task.user_id,
+      status:     'pending',
+      attempts:   0,
+      run_id:     runId,
+      created_at: new Date().toISOString(),
+    });
 
     if (insertErr) {
       console.error(`[CRON] Failed to enqueue task ${task.id}:`, insertErr.message);
@@ -1076,7 +1070,7 @@ async function processEmailJob(job, workerRunId) {
   });
   if (tokenErr) throw new Error(`Token insert failed: ${tokenErr.message}`);
 
-  const completionUrl = `https://sahilrathour007.github.io/Alpino_Retention_Webpage/alpino_journey.html?t=${token}`;
+  const completionUrl = `https://sahilrathour007.github.io/TWT_Retention_Webpage/alpino_journey.html?t=${token}`;
 
   const { data: emailLogRow } = await supabase.from('email_log').insert({
     user_id, task_id,
