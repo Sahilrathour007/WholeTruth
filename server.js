@@ -388,7 +388,7 @@ async function sendDay1TaskEmail(userId, userEmail, userName) {
     expires_at: expiresAt,
   });
 
-  const completionUrl = `https://sahilrathour007.github.io/Alpino_Retention_Webpage/alpino_journey.html?t=${token}`;
+  const completionUrl = `https://sahilrathour007.github.io/TWT_Retention_Webpage/alpino_journey.html?t=${token}`;
 
   const { data: emailLogRow } = await supabase.from('email_log').insert({
     user_id:    userId,
@@ -741,7 +741,7 @@ app.get('/complete', async (req, res) => {
   const { task_id, user_id, used } = tokenRow;
 
   if (used) {
-    return res.redirect(`https://sahilrathour007.github.io/Alpino_Retention_Webpage/alpino_journey.html?t=${t}`);
+    return res.redirect(`https://sahilrathour007.github.io/TWT_Retention_Webpage/alpino_journey.html?t=${t}`);
   }
 
   const { data: task } = await supabase
@@ -791,7 +791,7 @@ app.get('/complete', async (req, res) => {
     }
   }
 
-  res.redirect(`https://sahilrathour007.github.io/Alpino_Retention_Webpage/alpino_journey.html?t=${t}`);
+  res.redirect(`https://sahilrathour007.github.io/TWT_Retention_Webpage/alpino_journey.html?t=${t}`);
 });
 
 async function triggerReorderEmail(userId, taskId) {
@@ -1071,7 +1071,7 @@ async function processEmailJob(job, workerRunId) {
   });
   if (tokenErr) throw new Error(`Token insert failed: ${tokenErr.message}`);
 
-  const completionUrl = `https://sahilrathour007.github.io/Alpino_Retention_Webpage/alpino_journey.html?t=${token}`;
+  const completionUrl = `https://sahilrathour007.github.io/TWT_Retention_Webpage/alpino_journey.html?t=${token}`;
 
   const { data: emailLogRow } = await supabase.from('email_log').insert({
     user_id, task_id,
